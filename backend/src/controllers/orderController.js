@@ -1,31 +1,65 @@
 const Order = require('../models/Order');
+const MenuItem = require('../models/MenuItem');
+
+// Valid status transitions
+const VALID_TRANSITIONS = {
+  'ORDER_RECEIVED': ['PREPARING', 'CANCELLED'],
+  'PREPARING': ['READY', 'CANCELLED'],
+  'READY': ['OUT_FOR_DELIVERY', 'CANCELLED'],
+  'OUT_FOR_DELIVERY': ['DELIVERED', 'CANCELLED'],
+  'DELIVERED': [],
+  'CANCELLED': []
+};
 
 // @desc    Create new order
 // @route   POST /api/orders
 // @access  Private
 exports.createOrder = async (req, res) => {
   try {
-    const { items, address, paymentMethod, deliveryType, subtotal, discount, deliveryFee, total } = req.body;
+    const { items, address, paymentMethod, deliveryType, discount, deliveryFee } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'No items in order' });
     }
 
-    // Generate Order ID ABC-XXXX
+    // 1. Server-side Price Calculation
+    let calculatedSubtotal = 0;
+    const itemsWithPrices = [];
+
+    for (const item of items) {
+      const menuItem = await MenuItem.findById(item.menuItemId);
+      if (!menuItem) {
+        return res.status(404).json({ success: false, message: `Menu item ${item.menuItemId} not found` });
+      }
+      
+      const price = menuItem.price;
+      calculatedSubtotal += price * item.quantity;
+      
+      itemsWithPrices.push({
+        menuItemId: item.menuItemId,
+        name: menuItem.name,
+        price: price,
+        quantity: item.quantity
+      });
+    }
+
+    const calculatedTotal = calculatedSubtotal - (discount || 0) + (deliveryFee || 0);
+
+    // 2. Generate Order ID ABC-XXXX
     const random = Math.floor(1000 + Math.random() * 9000);
     const orderId = `ABC-${random}`;
 
     const order = await Order.create({
       orderId,
       customer: req.user.id,
-      items,
+      items: itemsWithPrices,
       address,
       paymentMethod,
       deliveryType,
-      subtotal,
+      subtotal: calculatedSubtotal,
       discount: discount || 0,
       deliveryFee: deliveryFee || 0,
-      total,
+      total: calculatedTotal,
       estimatedTime: 30
     });
 
@@ -75,11 +109,23 @@ exports.getMyOrders = async (req, res) => {
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
-    const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true, runValidators: true });
+    const order = await Order.findById(req.params.id);
 
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
+
+    // Enforce status transition rules
+    const allowed = VALID_TRANSITIONS[order.status] || [];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Invalid status transition from ${order.status} to ${status}` 
+      });
+    }
+
+    order.status = status;
+    await order.save();
 
     res.status(200).json({ success: true, data: order });
   } catch (error) {
@@ -92,8 +138,27 @@ exports.updateOrderStatus = async (req, res) => {
 // @access  Private (Manager/Owner)
 exports.getAllOrders = async (req, res) => {
   try {
-    const orders = await Order.find().populate('customer', 'name').sort('-createdAt');
-    res.status(200).json({ success: true, count: orders.length, data: orders });
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 20;
+    const startIndex = (page - 1) * limit;
+
+    const totalOrders = await Order.countDocuments();
+    const totalPages = Math.ceil(totalOrders / limit);
+
+    const orders = await Order.find()
+      .populate('customer', 'name')
+      .sort('-createdAt')
+      .skip(startIndex)
+      .limit(limit);
+
+    res.status(200).json({ 
+      success: true, 
+      count: orders.length, 
+      page,
+      totalPages,
+      totalOrders,
+      data: orders 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -130,11 +195,17 @@ exports.getOrdersForKitchen = async (req, res) => {
 // @access  Private (Manager/Owner)
 exports.cancelOrder = async (req, res) => {
   try {
-    const order = await Order.findByIdAndUpdate(req.params.id, { status: 'CANCELLED' }, { new: true });
-
+    const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
+
+    if (order.status === 'DELIVERED' || order.status === 'CANCELLED') {
+      return res.status(400).json({ success: false, message: 'Cannot cancel a delivered or already cancelled order' });
+    }
+
+    order.status = 'CANCELLED';
+    await order.save();
 
     res.status(200).json({ success: true, data: order });
   } catch (error) {
