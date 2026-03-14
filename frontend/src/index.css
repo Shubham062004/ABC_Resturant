@@ -41,3 +41,13 @@ body {
 input::placeholder {
   @apply text-slate-400;
 }
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
