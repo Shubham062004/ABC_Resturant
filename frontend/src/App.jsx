@@ -22,10 +22,6 @@ function App() {
           <Route path="/staff" element={<Staff />} />
         </Route>
 
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/orders" element={<Orders />} />
-        <Route path="/inventory" element={<Inventory />} />
-        <Route path="/staff" element={<Staff />} />
         <Route path="/" element={<Login />} />
       </Routes>
     </Router>

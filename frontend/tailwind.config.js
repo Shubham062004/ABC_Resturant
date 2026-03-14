@@ -22,8 +22,6 @@ export default {
         "full": "9999px"
       },
     },
-  theme: {
-    extend: {},
   },
   plugins: [],
 }
